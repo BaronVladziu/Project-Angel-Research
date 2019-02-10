@@ -4,6 +4,7 @@ from scipy import signal
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 ### CREATE TRANSCRIPTION DICTIONARY ###
 transcriptions = defaultdict(list)
 
@@ -31,6 +32,7 @@ for line in lines:
             phones.append(phone)
         phones.append("PAUSE")
 print(phones)
+
 
 ### SPLIT WAVE TO FRAMES ###
 min_voice_frequency = 73
@@ -93,6 +95,11 @@ while i < len(zero_crossings) - 1:
         zero_crossings.pop(i+1)
     i += 1
 
+# Split to frames
+frames = list()
+for i in range(0, len(zero_crossings)-1):
+    frames.append(data[zero_crossings[i]:zero_crossings[i+1]])
+print("len(frames):", len(frames))
 
 # Printing
 zero_data = np.zeros(len(data))
@@ -108,8 +115,75 @@ plt.grid(True)
 plt.show()
 
 
-# Split to frames
-frames = list()
-for i in range(0, len(zero_crossings)-1):
-    frames.append(data[zero_crossings[i]:zero_crossings[i+1]])
-print("len(frames):", len(frames))
+### CREATE INITIAL PHONE BORDERS ###
+class PhoneBegining:
+    name = ""
+    id = 0
+
+    def __init__(self, name, id):
+        self.name = name
+        self.id = id
+
+    def __str__(self):
+        return "( " + str(self.name) + ", " + str(self.id) + " )"
+
+    def __repr__(self):
+        return self.__str__()
+
+
+class PhoneModel:
+
+    def __init__(self, name, length):
+        self.name = name
+        self.length = length
+        self.calculated_freqs = np.zeros(self.length)
+        self.calculated_consts = np.zeros(self.length)
+        self.frames = list()
+        self.freqs = list()
+
+    def draw(self):
+        plt.plot(self.calculated_freqs*110 + self.calculated_consts)
+        plt.plot(self.calculated_freqs*220 + self.calculated_consts)
+        plt.plot(self.calculated_freqs*440 + self.calculated_consts)
+        plt.plot(self.calculated_freqs*880 + self.calculated_consts)
+        plt.plot(self.calculated_freqs*1760 + self.calculated_consts)
+        plt.grid(True)
+        plt.show()
+
+    def add(self, frame, freq):
+        self.frames.append(signal.resample(frame, self.length))
+        self.freqs.append(freq)
+
+    def calculate(self):
+        sum_val = np.zeros(self.length)
+        sum_valfreq = np.zeros(self.length)
+        sum_freq = 0
+        sum_freq2 = 0
+        for i in range(0, len(self.frames)):
+            sum_val += self.frames[i]
+            sum_valfreq += self.frames[i] * self.freqs[i]
+            sum_freq += self.freqs[i]
+            sum_freq2 += np.power(self.freqs[i], 2)
+        self.calculated_freqs = (sum_valfreq * len(self.frames) - sum_val * sum_freq) / (len(self.frames) * sum_freq2 - np.power(sum_freq, 2))
+        self.calculated_consts = (sum_val * (sum_freq2 - np.power(sum_freq, 2) + sum_freq) - sum_valfreq * len(self.frames)) / (len(self.frames) * (sum_freq2 - np.power(sum_freq, 2)))
+
+
+phone_borders = list()
+init_phone_length = int(len(frames)/len(phones))
+for i in range(0, len(phones)):
+    phone_borders.append(PhoneBegining(phones[i], i*init_phone_length))
+print(phone_borders)
+
+# Create phone models
+phone_models = dict()
+for name in phones:
+    phone_models[name] = PhoneModel(name, 2048)
+
+for i in range(0, len(phone_borders) - 1):
+    for j in range(phone_borders[i].id, phone_borders[i+1].id):
+        phone_models[phone_borders[i].name].add(frames[j], fs/len(frames[j]))
+for j in range(phone_borders[-1].id, len(frames)):
+    phone_models[phone_borders[-1].name].add(frames[j], fs/len(frames[j]))
+
+for name in phone_models:
+    phone_models[name].calculate()
