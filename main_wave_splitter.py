@@ -3,6 +3,7 @@ from scipy.io import wavfile
 from scipy import signal
 import matplotlib.pyplot as plt
 import numpy as np
+import sounddevice as sd
 
 
 ### CREATE TRANSCRIPTION DICTIONARY ###
@@ -101,18 +102,18 @@ for i in range(0, len(zero_crossings)-1):
     frames.append(data[zero_crossings[i]:zero_crossings[i+1]])
 print("len(frames):", len(frames))
 
-# Printing
-zero_data = np.zeros(len(data))
-for zero in zero_crossings:
-    zero_data[zero] = 30000
-
-length = 30000
-start = 30000
-plt.plot(filtered_data[start : start+length])
-plt.plot(zero_data[start : start+length])
-plt.ylim(-30000, 30000)
-plt.grid(True)
-plt.show()
+# # Printing
+# zero_data = np.zeros(len(data))
+# for zero in zero_crossings:
+#     zero_data[zero] = 30000
+#
+# length = 30000
+# start = 30000
+# plt.plot(filtered_data[start : start+length])
+# plt.plot(zero_data[start : start+length])
+# plt.ylim(-30000, 30000)
+# plt.grid(True)
+# plt.show()
 
 
 ### CREATE INITIAL PHONE BORDERS ###
@@ -167,6 +168,14 @@ class PhoneModel:
         self.calculated_freqs = (sum_valfreq * len(self.frames) - sum_val * sum_freq) / (len(self.frames) * sum_freq2 - np.power(sum_freq, 2))
         self.calculated_consts = (sum_val * (sum_freq2 - np.power(sum_freq, 2) + sum_freq) - sum_valfreq * len(self.frames)) / (len(self.frames) * (sum_freq2 - np.power(sum_freq, 2)))
 
+    def count_frame_to_model_difference(self, frame, freq):
+        resampled_frame = signal.resample(frame, self.length)
+        model_frame = self.calculated_freqs*freq + self.calculated_consts
+        return np.sum(np.power(resampled_frame - model_frame, 2))
+
+    def get_frame(self, freq, fs):
+        return signal.resample(self.calculated_freqs*freq + self.calculated_consts, int(fs/freq))
+
 
 phone_borders = list()
 init_phone_length = int(len(frames)/len(phones))
@@ -180,10 +189,78 @@ for name in phones:
     phone_models[name] = PhoneModel(name, 2048)
 
 for i in range(0, len(phone_borders) - 1):
-    for j in range(phone_borders[i].id, phone_borders[i+1].id):
-        phone_models[phone_borders[i].name].add(frames[j], fs/len(frames[j]))
+    if phone_borders[i].name != "PAUSE":
+        for j in range(phone_borders[i].id, phone_borders[i+1].id):
+            phone_models[phone_borders[i].name].add(frames[j], fs/len(frames[j]))
 for j in range(phone_borders[-1].id, len(frames)):
-    phone_models[phone_borders[-1].name].add(frames[j], fs/len(frames[j]))
+    if phone_borders[-1].name != "PAUSE":
+        phone_models[phone_borders[-1].name].add(frames[j], fs/len(frames[j]))
+
+phone_models["PAUSE"].add(np.zeros(2048), 100)
+phone_models["PAUSE"].add(np.zeros(2048), 1000)
 
 for name in phone_models:
     phone_models[name].calculate()
+
+
+### FIT MODELS TO PHONES ###
+def where_to_move_border(left_frame, left_freq, right_frame, right_freq, left_model, right_model):
+    left_to_left_difference = left_model.count_frame_to_model_difference(left_frame, left_freq)
+    left_to_right_difference = right_model.count_frame_to_model_difference(left_frame, left_freq)
+    right_to_left_difference = left_model.count_frame_to_model_difference(right_frame, right_freq)
+    right_to_right_difference = right_model.count_frame_to_model_difference(right_frame, right_freq)
+    if left_to_left_difference > left_to_right_difference and right_to_left_difference > right_to_right_difference:
+        return "left"
+    elif left_to_left_difference < left_to_right_difference and right_to_left_difference < right_to_right_difference:
+        return "right"
+    else:
+        return "stay"
+
+# TODO
+# for i in range(1, len(phone_borders)):
+#
+
+
+### CREATE SENTHESIS REQUEST ###
+class SynthPhone:
+    def __init__(self, phone, duration, pitch):
+        self.phone = phone
+        self.duration = duration
+        self.pitch = pitch
+
+
+synth_phones = list()
+synth_phones.append(SynthPhone("PAUSE", 80, 220))
+synth_phones.append(SynthPhone("f", 20, 220))
+synth_phones.append(SynthPhone("ai", 180, 220))
+synth_phones.append(SynthPhone("PAUSE", 20, 220))
+synth_phones.append(SynthPhone("E", 80, 220))
+synth_phones.append(SynthPhone("n", 20, 220))
+synth_phones.append(SynthPhone("A", 160, 220))
+synth_phones.append(SynthPhone("f", 20, 220))
+synth_phones.append(SynthPhone("PAUSE", 20, 220))
+synth_phones.append(SynthPhone("E", 80, 220))
+synth_phones.append(SynthPhone("w", 20, 220))
+synth_phones.append(SynthPhone("e", 180, 220))
+synth_phones.append(SynthPhone("I", 20, 220))
+synth_phones.append(SynthPhone("PAUSE", 100, 220))
+
+
+### SYNTHESIZE SENTENCE ###
+synthesized_signal = np.zeros(0)
+for synth_phone in synth_phones:
+    for i in range(0, synth_phone.duration):
+        frame = phone_models[synth_phone.phone].get_frame(synth_phone.pitch, fs)
+        if synth_phone.phone != "PAUSE":
+            frame /= np.max(np.abs(frame))
+        synthesized_signal = np.concatenate([synthesized_signal, frame])
+synthesized_signal /= np.max(np.abs(synthesized_signal))
+
+
+wavfile.write('test.wav', fs, synthesized_signal)
+sd.play(synthesized_signal, fs)
+plt.plot(synthesized_signal)
+plt.grid(True)
+plt.show()
+
+
